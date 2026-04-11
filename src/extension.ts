@@ -115,7 +115,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Run command if specified.
         if (args.cmd && args.cmd.length > 0) {
-          terminal.sendText(args.cmd.join(" "));
+          await runCommandAndCloseOnExit(terminal, args.cmd);
         }
       },
     ),
@@ -295,7 +295,9 @@ function getManagedTerminalByName(name: string): ManagedTerminal | undefined {
   return undefined;
 }
 
-function updateLastFocusedTerminal(terminal: vscode.Terminal | undefined): void {
+function updateLastFocusedTerminal(
+  terminal: vscode.Terminal | undefined,
+): void {
   if (!terminal) {
     return;
   }
@@ -353,4 +355,80 @@ function getNextOpenIndex(
 
 function isOpenTerminalKey(familyKey: string, index: number): boolean {
   return managedTerminals.has(`${familyKey}:${index}`);
+}
+
+async function runCommandAndCloseOnExit(
+  terminal: vscode.Terminal,
+  cmd: string[],
+): Promise<void> {
+  const commandLine = cmd.join(" ");
+  const shellIntegrationWaitMs = 3000;
+  const shellIntegration =
+    terminal.shellIntegration ??
+    (await waitForShellIntegration(terminal, shellIntegrationWaitMs));
+
+  if (!shellIntegration) {
+    terminal.sendText(commandLine);
+    return;
+  }
+
+  let execution: vscode.TerminalShellExecution | undefined;
+  const cleanup = new vscode.Disposable(() => {
+    endListener.dispose();
+    closeListener.dispose();
+  });
+  const endListener = vscode.window.onDidEndTerminalShellExecution((event) => {
+    if (event.terminal !== terminal || event.execution !== execution) {
+      return;
+    }
+
+    cleanup.dispose();
+    terminal.dispose();
+  });
+  const closeListener = vscode.window.onDidCloseTerminal((closed) => {
+    if (closed === terminal) {
+      cleanup.dispose();
+    }
+  });
+
+  try {
+    execution = shellIntegration.executeCommand(commandLine);
+  } catch {
+    cleanup.dispose();
+    terminal.sendText(commandLine);
+  }
+}
+
+function waitForShellIntegration(
+  terminal: vscode.Terminal,
+  timeoutMs: number,
+): Promise<vscode.TerminalShellIntegration | undefined> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (
+      shellIntegration: vscode.TerminalShellIntegration | undefined,
+    ) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      listener.dispose();
+      resolve(shellIntegration);
+    };
+
+    const timeout = setTimeout(() => {
+      finish(undefined);
+    }, timeoutMs);
+
+    const listener = vscode.window.onDidChangeTerminalShellIntegration(
+      (event) => {
+        if (event.terminal === terminal) {
+          finish(event.shellIntegration);
+        }
+      },
+    );
+  });
 }
