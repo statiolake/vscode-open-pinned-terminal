@@ -1,11 +1,13 @@
 # Open Pinned Terminal
 
-A VS Code extension that opens a terminal in the editor area and pins it. Each terminal is identified by a `key`, so the same keybinding always brings up the same terminal instead of creating a new one.
+A VS Code extension that opens terminals in the editor area and pins them. Each terminal belongs to a `key` family and is identified as `key:0`, `key:1`, and so on.
 
 ## Features
 
 - Open a terminal as a pinned editor tab
-- Reuse an existing terminal by `key` — if it's still alive, it just gets focused
+- Cycle through existing numbered terminals in a `key` family
+- Restore the most recently active terminal in a `key` family when another tab is active
+- Force a new numbered terminal when needed
 - Optionally run a command on creation
 - Support for local terminals in Dev Container environments
 
@@ -29,11 +31,14 @@ Add a keybinding in `keybindings.json`:
 
 | Argument       | Type       | Required | Default       | Description                                          |
 | -------------- | ---------- | -------- | ------------- | ---------------------------------------------------- |
-| `key`          | `string`   | Yes      |               | Unique identifier for the terminal instance          |
+| `key`          | `string`   | Yes      |               | Terminal family key. Must not contain `:`            |
+| `forceNew`     | `boolean`  | No       | `false`       | Always create the next numbered terminal in the family |
 | `cmd`          | `string[]` | No       |               | Command to run when the terminal is first created     |
-| `terminalName` | `string`   | No       | same as `key` | Display name shown on the terminal tab                |
+| `terminalName` | `string`   | No       | same as `key:n` | Display name prefix shown on the terminal tab        |
 | `local`        | `boolean`  | No       | `false`       | Force a local terminal (useful in Dev Containers)     |
 | `isTransient`  | `boolean`  | No       | `false`       | Mark the terminal as transient (not restored on reload) |
+
+When `forceNew` is `false`, running the command from `codex:n` moves to the next existing `codex:n+1`, wrapping back to the first existing Codex terminal if needed. Running it from another tab restores the most recently active `codex:n`, or creates `codex:0` if none exists yet.
 
 ### Examples
 
@@ -61,6 +66,21 @@ Open a pinned terminal for Codex:
     "key": "codex",
     "terminalName": "Codex",
     "cmd": ["codex"]
+  }
+}
+```
+
+Always open the next new Codex terminal, regardless of the active tab:
+
+```jsonc
+{
+  "key": "ctrl+shift+x",
+  "command": "open-pinned-terminal.open",
+  "args": {
+    "key": "codex",
+    "terminalName": "Codex",
+    "cmd": ["codex"],
+    "forceNew": true
   }
 }
 ```

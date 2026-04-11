@@ -3,23 +3,55 @@ import * as vscode from "vscode";
 interface OpenPinnedTerminalArgs {
   cmd?: string[];
   key: string;
+  forceNew?: boolean;
   local?: boolean;
   terminalName?: string;
   isTransient?: boolean;
 }
 
-const managedTerminals = new Map<string, vscode.Terminal>();
+interface ManagedTerminal {
+  terminal: vscode.Terminal;
+  familyKey: string;
+  index: number;
+}
+
+interface TerminalFamily {
+  nextIndex: number;
+  lastActiveIndex?: number;
+}
+
+const managedTerminals = new Map<string, ManagedTerminal>();
+const terminalFamilies = new Map<string, TerminalFamily>();
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((closed) => {
-      for (const [key, terminal] of managedTerminals) {
-        if (terminal === closed) {
+      for (const [key, managed] of managedTerminals) {
+        if (managed.terminal === closed) {
           managedTerminals.delete(key);
+          const family = getTerminalFamily(managed.familyKey);
+          if (family.lastActiveIndex === managed.index) {
+            family.lastActiveIndex = getHighestOpenIndex(managed.familyKey);
+          }
           break;
         }
       }
-    })
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTerminal((active) => {
+      if (!active) {
+        return;
+      }
+
+      const managed = getManagedTerminalByTerminal(active);
+      if (!managed) {
+        return;
+      }
+
+      getTerminalFamily(managed.familyKey).lastActiveIndex = managed.index;
+    }),
   );
 
   context.subscriptions.push(
@@ -28,15 +60,25 @@ export function activate(context: vscode.ExtensionContext) {
       async (args: OpenPinnedTerminalArgs) => {
         if (!args?.key) {
           vscode.window.showErrorMessage(
-            "open-pinned-terminal.open: 'key' is required"
+            "open-pinned-terminal.open: 'key' is required",
           );
           return;
         }
 
-        // Check if a managed terminal already exists and is alive.
-        const existing = managedTerminals.get(args.key);
-        if (existing && existing.exitStatus === undefined) {
-          existing.show();
+        if (args.key.includes(":")) {
+          vscode.window.showErrorMessage(
+            "open-pinned-terminal.open: 'key' must not contain ':'",
+          );
+          return;
+        }
+
+        const key = getManagedTerminalKey(args.key, args.forceNew ?? false);
+
+        const existing = managedTerminals.get(key.fullKey);
+        if (existing && existing.terminal.exitStatus === undefined) {
+          existing.terminal.show();
+          getTerminalFamily(existing.familyKey).lastActiveIndex =
+            existing.index;
           return;
         }
 
@@ -48,16 +90,21 @@ export function activate(context: vscode.ExtensionContext) {
 
         // Create terminal.
         const terminal = vscode.window.createTerminal({
-          name: args.terminalName ?? args.key,
+          name: getTerminalName(args.terminalName, key),
           cwd: cwd ?? undefined,
           isTransient: args.isTransient ?? false,
         });
-        managedTerminals.set(args.key, terminal);
+        managedTerminals.set(key.fullKey, {
+          terminal,
+          familyKey: key.familyKey,
+          index: key.index,
+        });
+        getTerminalFamily(key.familyKey).lastActiveIndex = key.index;
 
         // Move to editor and pin.
         terminal.show();
         await vscode.commands.executeCommand(
-          "workbench.action.terminal.moveToEditor"
+          "workbench.action.terminal.moveToEditor",
         );
         await vscode.commands.executeCommand("workbench.action.pinEditor");
 
@@ -65,8 +112,8 @@ export function activate(context: vscode.ExtensionContext) {
         if (args.cmd && args.cmd.length > 0) {
           terminal.sendText(args.cmd.join(" "));
         }
-      }
-    )
+      },
+    ),
   );
 }
 
@@ -98,14 +145,14 @@ function resolveCwd(local: boolean): vscode.Uri | null | "error" {
       return localUri;
     }
     vscode.window.showErrorMessage(
-      "open-pinned-terminal: Failed to resolve local workspace path from Dev Container URI"
+      "open-pinned-terminal: Failed to resolve local workspace path from Dev Container URI",
     );
     return "error";
   }
 
   // Unsupported remote type.
   vscode.window.showErrorMessage(
-    `open-pinned-terminal: local terminal is not supported for remote type '${remoteName}'`
+    `open-pinned-terminal: local terminal is not supported for remote type '${remoteName}'`,
   );
   return "error";
 }
@@ -147,3 +194,119 @@ function getLocalCwdFromDevContainer(): vscode.Uri | undefined {
 }
 
 export function deactivate() {}
+
+function getManagedTerminalKey(
+  familyKey: string,
+  forceNew: boolean,
+): { fullKey: string; familyKey: string; index: number } {
+  const family = getTerminalFamily(familyKey);
+
+  if (forceNew) {
+    return allocateTerminalKey(familyKey, family);
+  }
+
+  const active = vscode.window.activeTerminal;
+  const activeManaged = active ? getManagedTerminalByTerminal(active) : undefined;
+  if (activeManaged?.familyKey === familyKey) {
+    const nextIndex = getNextOpenIndex(familyKey, activeManaged.index);
+    if (nextIndex !== undefined) {
+      return getTerminalKeyAtIndex(familyKey, nextIndex);
+    }
+  }
+
+  if (
+    family.lastActiveIndex !== undefined &&
+    isOpenTerminalKey(familyKey, family.lastActiveIndex)
+  ) {
+    return getTerminalKeyAtIndex(familyKey, family.lastActiveIndex);
+  }
+
+  return getTerminalKeyAtIndex(familyKey, 0);
+}
+
+function allocateTerminalKey(
+  familyKey: string,
+  family: TerminalFamily,
+): { fullKey: string; familyKey: string; index: number } {
+  const index = family.nextIndex;
+  family.nextIndex += 1;
+  return { fullKey: `${familyKey}:${index}`, familyKey, index };
+}
+
+function getTerminalKeyAtIndex(
+  familyKey: string,
+  index: number,
+): { fullKey: string; familyKey: string; index: number } {
+  const family = getTerminalFamily(familyKey);
+  family.nextIndex = Math.max(family.nextIndex, index + 1);
+  return { fullKey: `${familyKey}:${index}`, familyKey, index };
+}
+
+function getTerminalName(
+  terminalName: string | undefined,
+  key: { fullKey: string; index: number },
+): string {
+  if (!terminalName) {
+    return key.fullKey;
+  }
+
+  return `${terminalName}:${key.index}`;
+}
+
+function getTerminalFamily(familyKey: string): TerminalFamily {
+  let family = terminalFamilies.get(familyKey);
+  if (!family) {
+    family = { nextIndex: 0 };
+    terminalFamilies.set(familyKey, family);
+  }
+  return family;
+}
+
+function getManagedTerminalByTerminal(
+  terminal: vscode.Terminal,
+): ManagedTerminal | undefined {
+  for (const managed of managedTerminals.values()) {
+    if (managed.terminal === terminal) {
+      return managed;
+    }
+  }
+  return undefined;
+}
+
+function getHighestOpenIndex(familyKey: string): number | undefined {
+  let highest: number | undefined;
+  for (const managed of managedTerminals.values()) {
+    if (managed.familyKey !== familyKey) {
+      continue;
+    }
+
+    highest = Math.max(highest ?? managed.index, managed.index);
+  }
+  return highest;
+}
+
+function getNextOpenIndex(
+  familyKey: string,
+  currentIndex: number,
+): number | undefined {
+  let next: number | undefined;
+  let first: number | undefined;
+
+  for (const managed of managedTerminals.values()) {
+    if (managed.familyKey !== familyKey) {
+      continue;
+    }
+
+    first = Math.min(first ?? managed.index, managed.index);
+
+    if (managed.index > currentIndex) {
+      next = Math.min(next ?? managed.index, managed.index);
+    }
+  }
+
+  return next ?? first;
+}
+
+function isOpenTerminalKey(familyKey: string, index: number): boolean {
+  return managedTerminals.has(`${familyKey}:${index}`);
+}
