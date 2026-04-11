@@ -13,11 +13,12 @@ interface ManagedTerminal {
   terminal: vscode.Terminal;
   familyKey: string;
   index: number;
+  name: string;
 }
 
 interface TerminalFamily {
   nextIndex: number;
-  lastActiveIndex?: number;
+  lastFocusedIndex?: number;
 }
 
 const managedTerminals = new Map<string, ManagedTerminal>();
@@ -30,8 +31,8 @@ export function activate(context: vscode.ExtensionContext) {
         if (managed.terminal === closed) {
           managedTerminals.delete(key);
           const family = getTerminalFamily(managed.familyKey);
-          if (family.lastActiveIndex === managed.index) {
-            family.lastActiveIndex = getHighestOpenIndex(managed.familyKey);
+          if (family.lastFocusedIndex === managed.index) {
+            family.lastFocusedIndex = getHighestOpenIndex(managed.familyKey);
           }
           break;
         }
@@ -41,16 +42,19 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTerminal((active) => {
-      if (!active) {
-        return;
-      }
+      updateLastFocusedTerminal(active);
+    }),
+  );
 
-      const managed = getManagedTerminalByTerminal(active);
-      if (!managed) {
-        return;
-      }
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(() => {
+      updateLastFocusedTerminalTab();
+    }),
+  );
 
-      getTerminalFamily(managed.familyKey).lastActiveIndex = managed.index;
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabGroups(() => {
+      updateLastFocusedTerminalTab();
     }),
   );
 
@@ -77,8 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
         const existing = managedTerminals.get(key.fullKey);
         if (existing && existing.terminal.exitStatus === undefined) {
           existing.terminal.show();
-          getTerminalFamily(existing.familyKey).lastActiveIndex =
-            existing.index;
+          updateLastFocusedManagedTerminal(existing);
           return;
         }
 
@@ -89,8 +92,9 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         // Create terminal.
+        const terminalName = getTerminalName(args.terminalName, key);
         const terminal = vscode.window.createTerminal({
-          name: getTerminalName(args.terminalName, key),
+          name: terminalName,
           cwd: cwd ?? undefined,
           isTransient: args.isTransient ?? false,
         });
@@ -98,8 +102,9 @@ export function activate(context: vscode.ExtensionContext) {
           terminal,
           familyKey: key.familyKey,
           index: key.index,
+          name: terminalName,
         });
-        getTerminalFamily(key.familyKey).lastActiveIndex = key.index;
+        updateLastFocusedManagedTerminal(managedTerminals.get(key.fullKey)!);
 
         // Move to editor and pin.
         terminal.show();
@@ -205,20 +210,19 @@ function getManagedTerminalKey(
     return allocateTerminalKey(familyKey, family);
   }
 
-  const active = vscode.window.activeTerminal;
-  const activeManaged = active ? getManagedTerminalByTerminal(active) : undefined;
-  if (activeManaged?.familyKey === familyKey) {
-    const nextIndex = getNextOpenIndex(familyKey, activeManaged.index);
+  const activeTab = getManagedTerminalFromActiveTab();
+  if (activeTab?.familyKey === familyKey) {
+    const nextIndex = getNextOpenIndex(familyKey, activeTab.index);
     if (nextIndex !== undefined) {
       return getTerminalKeyAtIndex(familyKey, nextIndex);
     }
   }
 
   if (
-    family.lastActiveIndex !== undefined &&
-    isOpenTerminalKey(familyKey, family.lastActiveIndex)
+    family.lastFocusedIndex !== undefined &&
+    isOpenTerminalKey(familyKey, family.lastFocusedIndex)
   ) {
-    return getTerminalKeyAtIndex(familyKey, family.lastActiveIndex);
+    return getTerminalKeyAtIndex(familyKey, family.lastFocusedIndex);
   }
 
   return getTerminalKeyAtIndex(familyKey, 0);
@@ -271,6 +275,46 @@ function getManagedTerminalByTerminal(
     }
   }
   return undefined;
+}
+
+function getManagedTerminalFromActiveTab(): ManagedTerminal | undefined {
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (!(tab?.input instanceof vscode.TabInputTerminal)) {
+    return undefined;
+  }
+
+  return getManagedTerminalByName(tab.label);
+}
+
+function getManagedTerminalByName(name: string): ManagedTerminal | undefined {
+  for (const managed of managedTerminals.values()) {
+    if (managed.name === name) {
+      return managed;
+    }
+  }
+  return undefined;
+}
+
+function updateLastFocusedTerminal(terminal: vscode.Terminal | undefined): void {
+  if (!terminal) {
+    return;
+  }
+
+  const managed = getManagedTerminalByTerminal(terminal);
+  if (managed) {
+    updateLastFocusedManagedTerminal(managed);
+  }
+}
+
+function updateLastFocusedTerminalTab(): void {
+  const managed = getManagedTerminalFromActiveTab();
+  if (managed) {
+    updateLastFocusedManagedTerminal(managed);
+  }
+}
+
+function updateLastFocusedManagedTerminal(managed: ManagedTerminal): void {
+  getTerminalFamily(managed.familyKey).lastFocusedIndex = managed.index;
 }
 
 function getHighestOpenIndex(familyKey: string): number | undefined {

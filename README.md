@@ -6,7 +6,7 @@ A VS Code extension that opens terminals in the editor area and pins them. Each 
 
 - Open a terminal as a pinned editor tab
 - Cycle through existing numbered terminals in a `key` family
-- Restore the most recently active terminal in a `key` family when another tab is active
+- Restore the most recently focused terminal tab in a `key` family when another tab is active
 - Force a new numbered terminal when needed
 - Optionally run a command on creation
 - Support for local terminals in Dev Container environments
@@ -38,7 +38,7 @@ Add a keybinding in `keybindings.json`:
 | `local`        | `boolean`  | No       | `false`       | Force a local terminal (useful in Dev Containers)     |
 | `isTransient`  | `boolean`  | No       | `false`       | Mark the terminal as transient (not restored on reload) |
 
-When `forceNew` is `false`, running the command from `codex:n` moves to the next existing `codex:n+1`, wrapping back to the first existing Codex terminal if needed. Running it from another tab restores the most recently active `codex:n`, or creates `codex:0` if none exists yet.
+When `forceNew` is `false`, running the command while the active tab is `codex:n` moves to the next existing `codex:n+1`, wrapping back to the first existing Codex terminal if needed. Running it from another tab restores the most recently focused `codex:n`, including terminal tabs focused by clicking, or creates `codex:0` if none exists yet.
 
 ### Examples
 
