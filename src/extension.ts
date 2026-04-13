@@ -96,6 +96,7 @@ export function activate(context: vscode.ExtensionContext) {
         const terminal = vscode.window.createTerminal({
           name: terminalName,
           cwd: cwd ?? undefined,
+          location: vscode.TerminalLocation.Editor,
           isTransient: args.isTransient ?? false,
         });
         managedTerminals.set(key.fullKey, {
@@ -106,11 +107,8 @@ export function activate(context: vscode.ExtensionContext) {
         });
         updateLastFocusedManagedTerminal(managedTerminals.get(key.fullKey)!);
 
-        // Move to editor and pin.
+        // Show and pin the editor terminal.
         terminal.show();
-        await vscode.commands.executeCommand(
-          "workbench.action.terminal.moveToEditor",
-        );
         await vscode.commands.executeCommand("workbench.action.pinEditor");
 
         // Run command if specified.
