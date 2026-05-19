@@ -76,9 +76,12 @@ export function activate(context: vscode.ExtensionContext) {
           return;
         }
 
-        const key = getManagedTerminalKey(args.key, args.forceNew ?? false);
+        const forceNew = args.forceNew ?? false;
+        const key = forceNew
+          ? undefined
+          : getManagedTerminalKey(args.key, forceNew);
 
-        const existing = managedTerminals.get(key.fullKey);
+        const existing = key ? managedTerminals.get(key.fullKey) : undefined;
         if (existing && existing.terminal.exitStatus === undefined) {
           existing.terminal.show();
           updateLastFocusedManagedTerminal(existing);
@@ -86,26 +89,27 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         // Determine cwd.
-        const cwd = resolveCwd(args.local ?? false);
-        if (cwd === "error") {
-          return; // error already shown
+        const cwd = await resolveCwd(args.local ?? false);
+        if (cwd === "abort") {
+          return; // error already shown or user cancelled
         }
 
         // Create terminal.
-        const terminalName = getTerminalName(args.terminalName, key);
+        const newKey = key ?? getManagedTerminalKey(args.key, forceNew);
+        const terminalName = getTerminalName(args.terminalName, newKey);
         const terminal = vscode.window.createTerminal({
           name: terminalName,
           cwd: cwd ?? undefined,
           location: vscode.TerminalLocation.Editor,
           isTransient: args.isTransient ?? false,
         });
-        managedTerminals.set(key.fullKey, {
+        managedTerminals.set(newKey.fullKey, {
           terminal,
-          familyKey: key.familyKey,
-          index: key.index,
+          familyKey: newKey.familyKey,
+          index: newKey.index,
           name: terminalName,
         });
-        updateLastFocusedManagedTerminal(managedTerminals.get(key.fullKey)!);
+        updateLastFocusedManagedTerminal(managedTerminals.get(newKey.fullKey)!);
 
         // Show and pin the editor terminal.
         terminal.show();
@@ -125,39 +129,58 @@ export function activate(context: vscode.ExtensionContext) {
  *
  * Returns:
  * - A Uri for the cwd
- * - null to let VS Code pick the default (remote workspace)
- * - "error" if we can't determine the cwd and should abort
+ * - null to let VS Code pick the default when there is no workspace folder
+ * - "abort" if we can't determine the cwd or the user cancelled
  */
-function resolveCwd(local: boolean): vscode.Uri | null | "error" {
-  if (!local) {
-    // Let VS Code decide — when connected to remote, this creates a remote terminal.
-    return null;
-  }
+async function resolveCwd(local: boolean): Promise<vscode.Uri | null | "abort"> {
+  const folder = await selectWorkspaceFolder();
+  if (folder === "cancelled") return "abort";
+
+  if (!local) return folder?.uri ?? null;
 
   const remoteName = vscode.env.remoteName;
 
   if (!remoteName) {
-    // Not connected to remote. workspaceFolders[0].uri is file:// already.
-    const folder = vscode.workspace.workspaceFolders?.[0];
     return folder?.uri ?? null;
   }
 
   if (remoteName === "dev-container") {
-    const localUri = getLocalCwdFromDevContainer();
+    const localUri = folder ? getLocalCwdFromDevContainer(folder) : undefined;
     if (localUri) {
       return localUri;
     }
     vscode.window.showErrorMessage(
       "open-pinned-terminal: Failed to resolve local workspace path from Dev Container URI",
     );
-    return "error";
+    return "abort";
   }
 
   // Unsupported remote type.
   vscode.window.showErrorMessage(
     `open-pinned-terminal: local terminal is not supported for remote type '${remoteName}'`,
   );
-  return "error";
+  return "abort";
+}
+
+async function selectWorkspaceFolder(): Promise<
+  vscode.WorkspaceFolder | undefined | "cancelled"
+> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return undefined;
+  if (folders.length === 1) return folders[0];
+
+  const picked = await vscode.window.showQuickPick(
+    folders.map((folder) => ({
+      label: folder.name,
+      description: folder.uri.fsPath || folder.uri.path,
+      folder,
+    })),
+    {
+      placeHolder: "Select workspace folder for the terminal",
+    },
+  );
+
+  return picked?.folder ?? "cancelled";
 }
 
 /**
@@ -172,10 +195,9 @@ function resolveCwd(local: boolean): vscode.Uri | null | "error" {
  *
  * This encoding is defined in devcontainers/cli (OSS).
  */
-function getLocalCwdFromDevContainer(): vscode.Uri | undefined {
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) return undefined;
-
+function getLocalCwdFromDevContainer(
+  folder: vscode.WorkspaceFolder,
+): vscode.Uri | undefined {
   const uri = folder.uri;
   if (uri.scheme !== "vscode-remote") return undefined;
 

@@ -43,6 +43,8 @@ When `forceNew` is `false`, running the command while the active tab is `codex:n
 
 When `cmd` is specified and VS Code shell integration is available, the command is run through shell integration and the terminal closes automatically when that command exits. If shell integration is unavailable, the command falls back to the previous `sendText` behavior and the terminal stays open.
 
+When the workspace has multiple root folders, creating a new terminal shows a folder picker and opens the terminal in the selected workspace folder.
+
 ### Examples
 
 Open a pinned terminal for Claude Code:
