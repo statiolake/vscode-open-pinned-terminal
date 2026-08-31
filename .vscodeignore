@@ -1,6 +1,48 @@
-src/
-.vscode/
-tsconfig.json
+# Source (bundled into dist/extension.js by esbuild)
+src/**
+**/*.ts
+**/*.map
+
+# Intermediate build output
+out/**
+dist/**/*.map
+
+# Development / editor config
+.vscode/**
+.vscode-test/**
+.vscode-test.mjs
+.devcontainer/**
+.github/**
+.claude/**
 .gitignore
-node_modules/
+.gitattributes
+
+# Config files
+tsconfig*.json
+eslint.config.*
+.eslintrc*
+biome.json
+esbuild.js
+
+# Package manager
+node_modules/**
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Scaffolding docs
+vsc-extension-quickstart.md
+
+# Packaged output
 *.vsix
+
+# Secrets / credentials (never ship these)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.ovsx-token
+.vsce-token
+.npmrc
